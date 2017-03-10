@@ -36,6 +36,16 @@ import com.android.internal.util.IndentingPrintWriter;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.concurrent.atomic.AtomicBoolean;
+import android.provider.Settings;
+
+import android.content.ContentResolver;
+import android.net.StaticIpConfiguration;
+import java.net.InetAddress;
+import java.net.Inet4Address;
+import android.net.IpConfiguration;
+import android.net.EthernetManager;
+import android.net.NetworkUtils;
+import android.net.LinkAddress;
 
 /**
  * EthernetServiceImpl handles remote Ethernet operation requests by implementing
@@ -62,10 +72,86 @@ public class EthernetServiceImpl extends IEthernetManager.Stub {
         mEthernetConfigStore = new EthernetConfigStore();
         mIpConfiguration = mEthernetConfigStore.readIpAndProxyConfigurations();
 
+        checkUseStaticIp() ;
+
         Log.i(TAG, "Read stored IP configuration: " + mIpConfiguration);
 
         mTracker = new EthernetNetworkFactory(mListeners);
     }
+
+     private String mIpAddr;
+     private String mGateway;
+     private String mNetmask;
+     private String mDns1;
+     private String mDns2;
+     private void checkUseStaticIp() {
+        final ContentResolver cr = mContext.getContentResolver();
+        try {
+            if (Settings.System.getInt(cr, Settings.System.ETHERNET_USE_STATIC_IP) == 0) {
+                Log.d(TAG, "checkUseStaticIp() : user set to use DHCP, about to Return.");
+                return;
+            }
+        } catch (Settings.SettingNotFoundException e) {
+            return;
+        }
+
+            String addr = Settings.System.getString(cr, Settings.System.ETHERNET_STATIC_IP);
+            if (addr != null) {
+        mIpAddr = addr;
+            } else {
+                Log.d(TAG, "checkUseStaticIp() : No valid IP addr.");
+                return;
+            }
+            addr = Settings.System.getString(cr, Settings.System.ETHERNET_STATIC_GATEWAY);
+            if (addr != null) {
+        mGateway = addr;
+            } else {
+                Log.d(TAG, "checkUseStaticIp() : No valid gateway.");
+                return;
+            }
+            addr = Settings.System.getString(cr, Settings.System.ETHERNET_STATIC_NETMASK);
+            if (addr != null) {
+        mNetmask = addr;
+            } else {
+                Log.d(TAG, "checkUseStaticIp() : No valid netmask.");
+                return;
+            }
+            addr = Settings.System.getString(cr, Settings.System.ETHERNET_STATIC_DNS1);
+            if (addr != null) {
+        mDns1 = addr;
+            } else {
+                Log.d(TAG, "checkUseStaticIp() : No valid dns1.");
+                return;
+            }
+            addr = Settings.System.getString(cr, Settings.System.ETHERNET_STATIC_DNS2);
+            if (addr != null) {
+        mDns2 = addr;
+            } else {
+                Log.d(TAG, "checkUseStaticIp() : No valid dns2.");
+                mDns2 = "0.0.0.0";
+//                return;
+            }
+            try{
+           // long now = SystemClock.uptimeMillis();
+                StaticIpConfiguration sic = new StaticIpConfiguration();
+                InetAddress mask = NetworkUtils.numericToInetAddress(mNetmask);
+                int pref = 24 ;
+                if(mask instanceof Inet4Address){
+                    pref = NetworkUtils.netmaskIntToPrefixLength(NetworkUtils.inetAddressToInt((Inet4Address)mask));
+                }
+                sic.ipAddress = new LinkAddress(InetAddress.getByName(mIpAddr),pref);
+                sic.gateway = InetAddress.getByName(mGateway);
+                sic.dnsServers.add(InetAddress.getByName(mDns1));
+                sic.dnsServers.add(InetAddress.getByName(mDns2));
+
+                mIpConfiguration = new IpConfiguration(IpConfiguration.IpAssignment.STATIC
+                    ,IpConfiguration.ProxySettings.UNASSIGNED,sic,null);    
+                }catch(Exception ex){
+                return ;
+            }
+
+    }
+
 
     private void enforceAccessPermission() {
         mContext.enforceCallingOrSelfPermission(
@@ -85,6 +171,16 @@ public class EthernetServiceImpl extends IEthernetManager.Stub {
                 "ConnectivityService");
     }
 
+    public boolean setEthernetEnabled(boolean enable) {
+        //enforceChangePermission();
+        Log.i(TAG,"setEthernetEnabled() : enable="+enable);
+        if ( enable ) {
+           return mTracker.setInterfaceUp();
+        } else {
+           return mTracker.setInterfaceDown(); 
+        }
+    }
+
     public void start() {
         Log.i(TAG, "Starting Ethernet service");
 
@@ -95,6 +191,10 @@ public class EthernetServiceImpl extends IEthernetManager.Stub {
         mTracker.start(mContext, mHandler);
 
         mStarted.set(true);
+/*      int ethernet_on = Settings.Secure.getInt(mContext.getContentResolver(), Settings.Secure.ETHERNET_ON, 0);
+        if(ethernet_on == 0 ) {
+           setEthernetEnabled(false);
+        }  */
     }
 
     /**
@@ -169,6 +269,16 @@ public class EthernetServiceImpl extends IEthernetManager.Stub {
         mListeners.unregister(listener);
     }
 
+    @Override
+    public int getEthernetConnectState() {
+        // enforceAccessPermission();
+        Log.d(TAG,"getEthernetEnabledState() : Entered.");
+        return mTracker.mEthernetCurrentState;
+    }
+    @Override
+    public int getEthernetIfaceState() {
+        return mTracker.getEthernetIfaceState();
+    }
     @Override
     protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
         final IndentingPrintWriter pw = new IndentingPrintWriter(writer, "  ");
